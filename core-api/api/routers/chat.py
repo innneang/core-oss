@@ -9,7 +9,8 @@ from api.config import settings
 from api.rate_limit import limiter
 from lib.supabase_client import get_authenticated_async_client, get_async_service_role_client
 from lib.r2_client import get_r2_client
-from api.services.chat.claude_agent import stream_chat_response
+from api.services.chat.agent import stream_chat_response as stream_openai_chat_response
+from api.services.chat.claude_agent import stream_chat_response as stream_anthropic_chat_response
 from api.services.chat.events import error_event, done_event
 from api.services.chat.content_builder import ContentBuilder, create_attachment_part
 from api.services.chat.title_generator import generate_and_update_title
@@ -25,6 +26,13 @@ CHAT_STREAM_HEADERS = {
     "Cache-Control": "no-cache, no-transform",
     "X-Accel-Buffering": "no",
 }
+
+
+def get_chat_stream_response_handler():
+    """Return the configured chat streaming backend."""
+    if settings.chat_provider == "openai":
+        return stream_openai_chat_response
+    return stream_anthropic_chat_response
 
 
 # ============================================================================
@@ -466,9 +474,11 @@ async def send_message(
         text_content = ""  # Also track full text for content column (search/fallback)
         sources = []  # Web search sources (accumulates across multiple searches)
         display_events = []  # Keep for legacy display_content column
+        stream_chat_response = get_chat_stream_response_handler()
 
         try:
             logger.info(f"[CHAT] User {user['id']} sending message in conversation {conversation_id} (timezone: {body.timezone}, attachments: {len(attachments)})")
+            logger.info(f"[CHAT] Using provider '{settings.chat_provider}' for conversation {conversation_id}")
             # Resolve workspace_ids: prefer new array field, fall back to legacy single field
             effective_workspace_ids = body.workspace_ids or ([body.workspace_id] if body.workspace_id else None)
             async for chunk in stream_chat_response(formatted_history, user['id'], user['jwt'], context_dict, body.timezone, attachments, effective_workspace_ids, is_disconnected=request.is_disconnected):
@@ -712,9 +722,11 @@ async def regenerate_message(
         text_content = ""
         sources = []
         display_events = []
+        stream_chat_response = get_chat_stream_response_handler()
 
         try:
             logger.info(f"[CHAT] User {user['id']} regenerating message in conversation {conversation_id}")
+            logger.info(f"[CHAT] Using provider '{settings.chat_provider}' for regeneration in conversation {conversation_id}")
             async for chunk in stream_chat_response(formatted_history, user['id'], user['jwt'], None, body.timezone, None, None, effective_workspace_ids, is_disconnected=raw_request.is_disconnected):
                 stripped_chunk = chunk.strip()
                 if stripped_chunk:

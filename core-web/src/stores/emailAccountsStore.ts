@@ -24,6 +24,7 @@ interface EmailAccountsState {
   fetchAccounts: () => Promise<void>;
   addGoogleAccount: () => Promise<void>;
   addMicrosoftAccount: () => Promise<void>;
+  addICloudAccount: (email: string, appPassword: string, displayName?: string, authEmail?: string) => Promise<void>;
   removeAccount: (id: string) => Promise<void>;
 }
 
@@ -117,6 +118,37 @@ export const useEmailAccountsStore = create<EmailAccountsState>()((set, get) => 
       } else {
         set({ error: message, isAdding: false });
       }
+    }
+  },
+
+  addICloudAccount: async (email, appPassword, displayName, authEmail) => {
+    if (get().accounts.length >= MAX_ACCOUNTS) {
+      set({ error: `Maximum of ${MAX_ACCOUNTS} email accounts allowed` });
+      return;
+    }
+
+    set({ isAdding: true, error: null });
+    try {
+      const account = await addEmailAccount({
+        provider: 'icloud',
+        provider_email: email,
+        auth_email: authEmail,
+        provider_name: displayName,
+        app_password: appPassword,
+        scopes: [],
+      });
+
+      set((state) => ({
+        accounts: [...state.accounts, account].sort((a, b) => a.account_order - b.account_order),
+        isAdding: false,
+      }));
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error('Failed to add iCloud account');
+      set({
+        error: error.message,
+        isAdding: false,
+      });
+      throw error;
     }
   },
 

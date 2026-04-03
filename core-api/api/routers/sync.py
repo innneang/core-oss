@@ -1,7 +1,7 @@
 """
-Sync router - Manual sync triggers and watch management endpoints
+Sync router - Manual sync triggers and watch management endpoints.
 
-Supports both Google and Microsoft providers.
+Supports Google, Microsoft, and iCloud providers.
 """
 from fastapi import APIRouter, HTTPException, status, Depends
 from pydantic import BaseModel
@@ -68,6 +68,7 @@ class AccountSyncResult(BaseModel):
     calendar: Optional[Dict[str, Any]] = None
     outlook: Optional[Dict[str, Any]] = None
     outlook_calendar: Optional[Dict[str, Any]] = None
+    icloud: Optional[Dict[str, Any]] = None
 
 
 class SyncSummary(BaseModel):
@@ -75,6 +76,7 @@ class SyncSummary(BaseModel):
     total_accounts: int
     google_accounts: int
     microsoft_accounts: int
+    icloud_accounts: int
 
 
 class TriggerSyncResponse(BaseModel):
@@ -302,6 +304,7 @@ async def trigger_manual_sync(
     Supports:
     - Google: Gmail + Calendar sync (all connected Google accounts)
     - Microsoft: Outlook email + Calendar sync (all connected Microsoft accounts)
+    - iCloud: IMAP email sync (all connected iCloud accounts)
 
     Useful for:
     - Testing the sync functionality
@@ -325,8 +328,9 @@ async def trigger_manual_sync(
         all_connections = [decrypt_ext_connection_tokens(c) for c in (connections.data or [])]
         google_connections = [c for c in all_connections if c['provider'] == 'google']
         microsoft_connections = [c for c in all_connections if c['provider'] == 'microsoft']
+        icloud_connections = [c for c in all_connections if c['provider'] == 'icloud']
 
-        logger.info(f"📊 Found {len(google_connections)} Google + {len(microsoft_connections)} Microsoft accounts")
+        logger.info(f"📊 Found {len(google_connections)} Google + {len(microsoft_connections)} Microsoft + {len(icloud_connections)} iCloud accounts")
 
         results = {
             "user_id": user_id,
@@ -426,11 +430,42 @@ async def trigger_manual_sync(
 
             results['accounts'].append(account_result)
 
+        # Sync ALL iCloud accounts
+        for conn in icloud_connections:
+            account_id = conn['id']
+            account_email = conn.get('provider_email', 'unknown')
+            account_result = {
+                "account_id": account_id,
+                "provider": "icloud",
+                "email": account_email,
+                "is_primary": conn.get('is_primary', False),
+                "icloud": None
+            }
+
+            try:
+                from api.services.icloud import sync_icloud_connection
+
+                icloud_result = sync_icloud_connection(
+                    user_id=user_id,
+                    connection_id=account_id,
+                    connection_data=conn,
+                    max_results=100,
+                    days_back=30
+                )
+                account_result['icloud'] = icloud_result
+                logger.info(f"✅ iCloud sync for {account_email}: {icloud_result.get('new_emails', 0)} emails")
+            except Exception as e:
+                logger.error(f"❌ iCloud sync failed for {account_email}: {str(e)}")
+                account_result['icloud'] = {"success": False, "error": str(e)}
+
+            results['accounts'].append(account_result)
+
         # Summary
         results['summary'] = {
             "total_accounts": len(results['accounts']),
             "google_accounts": len(google_connections),
-            "microsoft_accounts": len(microsoft_connections)
+            "microsoft_accounts": len(microsoft_connections),
+            "icloud_accounts": len(icloud_connections)
         }
 
         logger.info(f"✅ Manual sync completed for {len(results['accounts'])} accounts")
@@ -442,4 +477,3 @@ async def trigger_manual_sync(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to trigger sync: {str(e)}"
         )
-

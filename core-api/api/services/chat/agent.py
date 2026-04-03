@@ -238,11 +238,23 @@ async def get_user_connections(user_id: str, user_jwt: str) -> List[str]:
     """
     Get list of connected providers for a user.
 
-    Returns list like ["google"] based on active ext_connections.
+    Returns list like ["google", "microsoft"] based on active ext_connections.
     """
-    # TODO: Query ext_connections table for user's active connections
-    # For now, assume google is always connected (backward compat)
-    return ["google"]
+    try:
+        from lib.supabase_client import get_authenticated_async_client
+        supabase = await get_authenticated_async_client(user_jwt)
+        result = await supabase.table("ext_connections") \
+            .select("provider") \
+            .eq("user_id", user_id) \
+            .eq("is_active", True) \
+            .execute()
+        providers = list({row["provider"] for row in (result.data or [])})
+        if providers:
+            return providers
+        return []
+    except Exception as e:
+        logger.warning(f"[CHAT] Failed to fetch ext_connections for user {user_id}: {e}")
+        return []
 
 
 async def stream_chat_response(
@@ -252,6 +264,8 @@ async def stream_chat_response(
     context: Optional[Dict[str, Any]] = None,
     user_timezone: str = "UTC",
     attachments: Optional[List[Dict[str, Any]]] = None,
+    workspace_ids: Optional[List[str]] = None,
+    is_disconnected: Optional[Any] = None,
 ) -> AsyncGenerator[str, None]:
     """
     Stream chat response from OpenAI, handling tool calls.
@@ -264,11 +278,24 @@ async def stream_chat_response(
         context: Optional context dict with 'emails' and/or 'documents' lists
         user_timezone: User's timezone identifier (e.g., "Europe/Oslo")
         attachments: Optional list of attachment dicts for Vision API (images)
+        workspace_ids: Optional list of workspace IDs to scope tool results
+        is_disconnected: Optional async callable that returns True if client disconnected
     """
     client = get_openai_client()
 
+    # Default to all user's workspaces if none specified
+    if not workspace_ids:
+        try:
+            from lib.supabase_client import get_authenticated_async_client
+            supabase = await get_authenticated_async_client(user_jwt)
+            ws_result = await supabase.table("workspace_members").select("workspace_id").eq("user_id", user_id).execute()
+            workspace_ids = [row["workspace_id"] for row in (ws_result.data or [])]
+            logger.info(f"[CHAT] Defaulting to all {len(workspace_ids)} workspaces for user {user_id}")
+        except Exception as e:
+            logger.warning(f"[CHAT] Failed to fetch default workspaces: {e}")
+
     # Build system prompt with user preferences, context, and timezone
-    system_prompt = await build_system_prompt(user_id, user_jwt, context, user_timezone)
+    system_prompt = await build_system_prompt(user_id, user_jwt, context, user_timezone, workspace_ids)
 
     system_message = {
         "role": "system",
@@ -308,13 +335,18 @@ async def stream_chat_response(
         user_id=user_id,
         user_jwt=user_jwt,
         user_timezone=user_timezone,
-        ext_connections=ext_connections
+        ext_connections=ext_connections,
+        workspace_ids=workspace_ids,
     )
 
     # Stream state for phase tracking
     state = StreamState()
 
     while True:
+        if is_disconnected and await is_disconnected():
+            logger.info("[CHAT] Client disconnected, aborting OpenAI stream")
+            return
+
         # Call OpenAI API with streaming for final response
         t_api_start = time.time()
         logger.info(f"⏱️ [TIMING] Starting OpenAI API call (model: gpt-5.1, has_images: {any(isinstance(m.get('content'), list) for m in current_messages)})")
@@ -332,6 +364,9 @@ async def stream_chat_response(
         first_chunk_logged = False
 
         async for chunk in stream:
+            if is_disconnected and await is_disconnected():
+                logger.info("[CHAT] Client disconnected during OpenAI stream")
+                return
             if not first_chunk_logged:
                 t_first_token = time.time()
                 logger.info(f"⏱️ [TIMING] OpenAI time-to-first-token: {(t_first_token-t_api_start)*1000:.0f}ms")

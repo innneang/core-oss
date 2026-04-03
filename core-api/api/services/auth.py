@@ -22,7 +22,7 @@ from api.config import settings
 logger = logging.getLogger(__name__)
 
 # Supported email providers
-SUPPORTED_PROVIDERS = ["google", "microsoft"]
+SUPPORTED_PROVIDERS = ["google", "microsoft", "icloud"]
 
 _ALLOWED_AVATAR_TYPES = {"image/png", "image/jpeg"}
 
@@ -770,7 +770,7 @@ class AuthService:
         account_order: int
     ) -> Dict[str, Any]:
         """
-        Add a secondary email account (Google or Microsoft).
+        Add a secondary email account (Google, Microsoft, or iCloud).
         Handles token exchange for iOS/web direct OAuth flow.
         Fetches user info from provider when using auth code flow.
         Sets up push notification watch for the new account (Google only for now).
@@ -784,7 +784,9 @@ class AuthService:
         redirect_uri = account_data.get('redirect_uri')
         access_token = account_data.get('access_token')
         refresh_token = account_data.get('refresh_token')
+        app_password = account_data.get('app_password')
         expires_in = None
+        metadata = account_data.get('metadata') or {}
 
         # User info - may be provided or fetched from provider
         provider_email = account_data.get('provider_email')
@@ -792,7 +794,24 @@ class AuthService:
         user_name = None
         user_picture = None
 
-        if server_auth_code:
+        if provider == 'icloud':
+            provider_email = provider_email or account_data.get('provider_email')
+            provider_user_id = provider_user_id or provider_email
+            refresh_token = app_password
+            access_token = access_token or f"icloud:{provider_email}"
+
+            from api.services.icloud import build_icloud_metadata, test_icloud_connection
+
+            metadata = build_icloud_metadata(metadata)
+            auth_email = account_data.get('auth_email') or metadata.get('auth_email') or provider_email
+            metadata['auth_email'] = auth_email
+            if not provider_email or not app_password:
+                raise ValueError("iCloud requires provider_email and app_password")
+            chosen_username = test_icloud_connection(provider_email, app_password, metadata)
+            metadata['imap_username'] = chosen_username
+            metadata['smtp_username'] = chosen_username
+            user_name = account_data.get('provider_name') or provider_email.split('@')[0]
+        elif server_auth_code:
             logger.info(f"🔑 [{provider}] Auth code flow - exchanging server auth code for secondary account")
             if code_verifier:
                 logger.info(f"🔐 [{provider}] PKCE code_verifier provided")
@@ -843,7 +862,9 @@ class AuthService:
             token_expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
 
         # Build metadata with user info and public client flag for PKCE/iOS flows
-        metadata = account_data.get('metadata') or {}
+        if provider == 'icloud':
+            from api.services.icloud import build_icloud_metadata
+            metadata = build_icloud_metadata(metadata)
         if user_name:
             metadata['full_name'] = user_name
         if user_picture:
@@ -976,6 +997,25 @@ class AuthService:
             except Exception as e:
                 logger.warning(f"⚠️ [{provider}] Failed to start initial sync: {str(e)}")
                 # Don't fail the whole operation if sync setup fails
+
+        elif provider == 'icloud':
+            try:
+                from api.services.icloud import sync_icloud_connection
+
+                sync_icloud_connection(
+                    user_id=user_id,
+                    connection_id=connection_id,
+                    connection_data={
+                        **new_connection,
+                        'provider_email': provider_email,
+                        'refresh_token': refresh_token,
+                        'metadata': metadata,
+                    },
+                    max_results=50,
+                    days_back=20,
+                )
+            except Exception as e:
+                logger.warning(f"⚠️ [icloud] Failed initial sync: {str(e)}")
 
         return {
             "message": "Email account added successfully",

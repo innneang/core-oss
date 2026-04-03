@@ -22,20 +22,49 @@ import { type EmailAttachmentUpload } from "../../../api/client";
 import ChipInput, { type ChipInputRef } from "./ChipInput";
 
 const COMPOSE_WIDTH = 520;
+const SEND_CAPABLE_PROVIDERS = new Set(["google", "icloud"]);
+
+function formatProviderLabel(provider?: string): string {
+  if (!provider) return "Account";
+  if (provider === "icloud") return "iCloud";
+  return provider.charAt(0).toUpperCase() + provider.slice(1);
+}
 
 export default function ComposeEmail() {
   const {
     compose,
+    accountsStatus,
     closeCompose,
     toggleComposeMinimize,
     updateComposeDraft,
     updateComposeBody,
+    setComposeSender,
     sendComposedEmail,
     discardCompose,
   } = useEmailStore();
 
   const { isOpen, isMinimized, draft, isSending, sendError } = compose;
   const queryClient = useQueryClient();
+  const sendCapableAccounts = accountsStatus.filter((account) =>
+    SEND_CAPABLE_PROVIDERS.has(account.provider)
+  );
+  const selectedSenderId =
+    draft.accountId || sendCapableAccounts[0]?.connectionId || "";
+  const selectedSender =
+    sendCapableAccounts.find(
+      (account) => account.connectionId === selectedSenderId
+    ) || null;
+  const senderLabel = draft.accountEmail
+    ? `${draft.accountEmail} (${formatProviderLabel(draft.accountProvider)})`
+    : selectedSender
+      ? `${selectedSender.email} (${formatProviderLabel(selectedSender.provider)})`
+      : "No Google or iCloud sending account connected";
+  const canSend =
+    !!draft.id ||
+    sendCapableAccounts.some(
+      (account) => account.connectionId === selectedSenderId
+    ) ||
+    (!!draft.accountId && accountsStatus.length === 0);
 
   // Refs for Tab navigation between fields
   const ccInputRef = useRef<ChipInputRef>(null);
@@ -404,6 +433,42 @@ export default function ComposeEmail() {
             </div>
             <div className="mx-4 border-t border-border-gray" />
 
+            {/* From */}
+            <div className="flex items-center px-4 py-2 gap-3">
+              <span className="w-12 shrink-0 text-sm text-text-secondary">
+                From
+              </span>
+              <div className="min-w-0 flex-1">
+                {draft.id ? (
+                  <span className="block truncate text-sm text-text-body">
+                    {senderLabel}
+                  </span>
+                ) : sendCapableAccounts.length > 0 ? (
+                  <select
+                    value={selectedSenderId}
+                    onChange={(e) => setComposeSender(e.target.value)}
+                    disabled={sendCapableAccounts.length === 1}
+                    className="w-full min-w-0 bg-transparent text-sm text-text-body outline-none disabled:text-text-secondary"
+                    title="Select the sending account"
+                  >
+                    {sendCapableAccounts.map((account) => (
+                      <option
+                        key={account.connectionId}
+                        value={account.connectionId}
+                      >
+                        {account.email} ({formatProviderLabel(account.provider)})
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="block text-sm text-red-600">
+                    No supported sending account is connected.
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="mx-4 border-t border-border-gray" />
+
             {/* Subject */}
             <div className="flex items-center px-4 py-2 gap-2">
               <input
@@ -557,7 +622,7 @@ export default function ComposeEmail() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleSend}
-                  disabled={isSending}
+                  disabled={isSending || !canSend}
                   className="flex items-center gap-2 px-4 py-2 bg-brand-primary text-text-light rounded-lg text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
                 >
                   <PaperAirplaneIcon className="w-4 h-4" />

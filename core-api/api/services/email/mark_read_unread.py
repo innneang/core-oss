@@ -15,6 +15,7 @@ import requests
 from googleapiclient.errors import HttpError
 from .google_api_helpers import get_gmail_service
 from api.services.microsoft.microsoft_oauth_provider import get_valid_microsoft_credentials
+from api.services.icloud import update_icloud_message_flags
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ def _get_email_provider(user_id: str, email_id: str, user_jwt: str) -> tuple[str
 
     # Get email with its connection info
     result = auth_supabase.table('emails')\
-        .select('ext_connection_id, ext_connections(id, provider, access_token, refresh_token, token_expires_at, metadata)')\
+        .select('ext_connection_id, provider_ids, ext_connections(id, provider, access_token, refresh_token, token_expires_at, metadata)')\
         .eq('user_id', user_id)\
         .eq('external_id', email_id)\
         .single()\
@@ -58,6 +59,8 @@ def _get_email_provider(user_id: str, email_id: str, user_jwt: str) -> tuple[str
         'refresh_token': connection.get('refresh_token'),
         'token_expires_at': connection.get('token_expires_at'),
         'metadata': connection.get('metadata', {}),
+        'provider_ids': result.data.get('provider_ids', {}),
+        'provider_email': connection.get('provider_email'),
     }
 
     return provider, connection_id, connection_data
@@ -237,6 +240,33 @@ def mark_as_read(
                 "provider": "microsoft"
             }
 
+        elif provider == 'icloud':
+            update_icloud_message_flags(
+                connection_data,
+                connection_data.get('provider_ids', {}),
+                mark_read=True,
+            )
+            email_result = auth_supabase.table('emails')\
+                .select('labels')\
+                .eq('user_id', user_id)\
+                .eq('external_id', email_id)\
+                .single()\
+                .execute()
+            current_labels = email_result.data.get('labels', []) if email_result.data else []
+            new_labels = _update_labels_array(current_labels, remove=['UNREAD'])
+            auth_supabase.table('emails')\
+                .update({'is_read': True, 'labels': new_labels})\
+                .eq('user_id', user_id)\
+                .eq('external_id', email_id)\
+                .execute()
+            return {
+                "message": "Email marked as read successfully",
+                "email_id": email_id,
+                "is_read": True,
+                "labels": new_labels,
+                "synced_to_provider": True,
+                "provider": "icloud"
+            }
         else:
             # Gmail - use existing label-based approach
             # Pass connection_id to use the correct account's credentials
@@ -344,6 +374,33 @@ def mark_as_unread(
                 "provider": "microsoft"
             }
 
+        elif provider == 'icloud':
+            update_icloud_message_flags(
+                connection_data,
+                connection_data.get('provider_ids', {}),
+                mark_read=False,
+            )
+            email_result = auth_supabase.table('emails')\
+                .select('labels')\
+                .eq('user_id', user_id)\
+                .eq('external_id', email_id)\
+                .single()\
+                .execute()
+            current_labels = email_result.data.get('labels', []) if email_result.data else []
+            new_labels = _update_labels_array(current_labels, add=['UNREAD'])
+            auth_supabase.table('emails')\
+                .update({'is_read': False, 'labels': new_labels})\
+                .eq('user_id', user_id)\
+                .eq('external_id', email_id)\
+                .execute()
+            return {
+                "message": "Email marked as unread successfully",
+                "email_id": email_id,
+                "is_read": False,
+                "labels": new_labels,
+                "synced_to_provider": True,
+                "provider": "icloud"
+            }
         else:
             # Gmail - use existing label-based approach
             # Pass connection_id to use the correct account's credentials
@@ -451,6 +508,33 @@ def mark_as_starred(
                 "provider": "microsoft"
             }
 
+        elif provider == 'icloud':
+            update_icloud_message_flags(
+                connection_data,
+                connection_data.get('provider_ids', {}),
+                mark_starred=True,
+            )
+            email_result = auth_supabase.table('emails')\
+                .select('labels')\
+                .eq('user_id', user_id)\
+                .eq('external_id', email_id)\
+                .single()\
+                .execute()
+            current_labels = email_result.data.get('labels', []) if email_result.data else []
+            new_labels = _update_labels_array(current_labels, add=['FLAGGED'])
+            auth_supabase.table('emails')\
+                .update({'is_starred': True, 'labels': new_labels})\
+                .eq('user_id', user_id)\
+                .eq('external_id', email_id)\
+                .execute()
+            return {
+                "message": "Email starred successfully",
+                "email_id": email_id,
+                "is_starred": True,
+                "labels": new_labels,
+                "synced_to_provider": True,
+                "provider": "icloud"
+            }
         else:
             # Gmail - use existing label-based approach
             # Pass connection_id to use the correct account's credentials
@@ -558,6 +642,33 @@ def unstar_email(
                 "provider": "microsoft"
             }
 
+        elif provider == 'icloud':
+            update_icloud_message_flags(
+                connection_data,
+                connection_data.get('provider_ids', {}),
+                mark_starred=False,
+            )
+            email_result = auth_supabase.table('emails')\
+                .select('labels')\
+                .eq('user_id', user_id)\
+                .eq('external_id', email_id)\
+                .single()\
+                .execute()
+            current_labels = email_result.data.get('labels', []) if email_result.data else []
+            new_labels = _update_labels_array(current_labels, remove=['FLAGGED'])
+            auth_supabase.table('emails')\
+                .update({'is_starred': False, 'labels': new_labels})\
+                .eq('user_id', user_id)\
+                .eq('external_id', email_id)\
+                .execute()
+            return {
+                "message": "Email unstarred successfully",
+                "email_id": email_id,
+                "is_starred": False,
+                "labels": new_labels,
+                "synced_to_provider": True,
+                "provider": "icloud"
+            }
         else:
             # Gmail - use existing label-based approach
             # Pass connection_id to use the correct account's credentials

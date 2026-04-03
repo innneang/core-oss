@@ -6,6 +6,7 @@ FastAPI backend for Core — the all-in-one productivity platform.
 
 ```bash
 cd core-api
+uv python pin 3.12
 make start
 ```
 
@@ -22,6 +23,9 @@ API runs at `http://localhost:8000`
 ```bash
 # Install uv if you haven't already
 curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Pin the local interpreter used by uv
+uv python pin 3.12
 
 # Install runtime + dev dependencies using uv
 uv pip install -r requirements-dev.txt

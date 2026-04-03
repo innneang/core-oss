@@ -20,9 +20,18 @@ import { emailKeys } from "../../../hooks/queries/keys";
 import { type EmailAttachmentUpload } from "../../../api/client";
 import ChipInput, { type ChipInputRef } from "../ComposeEmail/ChipInput";
 
+const SEND_CAPABLE_PROVIDERS = new Set(["google", "icloud"]);
+
+function formatProviderLabel(provider?: string): string {
+  if (!provider) return "Account";
+  if (provider === "icloud") return "iCloud";
+  return provider.charAt(0).toUpperCase() + provider.slice(1);
+}
+
 export default function InlineReplyComposer() {
   const queryClient = useQueryClient();
   const {
+    accountsStatus,
     inlineReply,
     updateInlineReplyDraft,
     updateInlineReplyBody,
@@ -32,6 +41,15 @@ export default function InlineReplyComposer() {
   } = useEmailStore();
 
   const { isOpen, draft, isSending, sendError } = inlineReply;
+  const sendCapableAccounts = accountsStatus.filter((account) =>
+    SEND_CAPABLE_PROVIDERS.has(account.provider)
+  );
+  const selectedSenderId =
+    draft?.accountId || sendCapableAccounts[0]?.connectionId || "";
+  const canSend =
+    sendCapableAccounts.some(
+      (account) => account.connectionId === selectedSenderId
+    ) || (!!draft?.accountId && accountsStatus.length === 0);
   const [showQuoted, setShowQuoted] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const ccInputRef = useRef<ChipInputRef>(null);
@@ -375,6 +393,39 @@ export default function InlineReplyComposer() {
       </div>
       <div className="mx-4 border-t border-border-gray" />
 
+      {/* From */}
+      <div className="flex items-center px-4 py-2 gap-3">
+        <span className="w-12 shrink-0 text-sm text-text-secondary">From</span>
+        <div className="min-w-0 flex-1">
+          {sendCapableAccounts.length > 0 ? (
+            <select
+              value={selectedSenderId}
+              onChange={(e) => {
+                const account = sendCapableAccounts.find(
+                  (item) => item.connectionId === e.target.value
+                );
+                updateInlineReplyDraft("accountId", e.target.value);
+                updateInlineReplyDraft("accountEmail", account?.email || "");
+              }}
+              disabled={sendCapableAccounts.length === 1}
+              className="w-full min-w-0 bg-transparent text-sm text-text-body outline-none disabled:text-text-secondary"
+              title="Select the sending account"
+            >
+              {sendCapableAccounts.map((account) => (
+                <option key={account.connectionId} value={account.connectionId}>
+                  {account.email} ({formatProviderLabel(account.provider)})
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span className="block text-sm text-red-600">
+              No supported sending account is connected.
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="mx-4 border-t border-border-gray" />
+
       {/* Editor with drag-and-drop */}
       <div
         className={`min-h-[100px] max-h-[250px] overflow-y-auto relative ${isDragOver ? "ring-2 ring-inset ring-brand-primary/40 bg-brand-primary/5" : ""}`}
@@ -445,7 +496,7 @@ export default function InlineReplyComposer() {
           {/* Send button */}
           <button
             onClick={handleSend}
-            disabled={isSending}
+            disabled={isSending || !canSend}
             className="flex items-center gap-2 px-4 py-1.5 bg-brand-primary text-text-light rounded-lg text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
           >
             <PaperAirplaneIcon className="w-4 h-4" />

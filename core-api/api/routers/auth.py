@@ -254,12 +254,15 @@ class AddEmailAccountRequest(BaseModel):
     # These can be optional when using server_auth_code (fetched from Google)
     provider_user_id: Optional[str] = None
     provider_email: Optional[EmailStr] = None
+    auth_email: Optional[str] = None
+    provider_name: Optional[str] = None
     # Either access_token OR server_auth_code must be provided
     access_token: Optional[str] = None
     server_auth_code: Optional[str] = None  # For iOS or web direct OAuth
     code_verifier: Optional[str] = None  # PKCE verifier for Microsoft iOS flow
     redirect_uri: Optional[str] = None  # Required for web OAuth code exchange
     refresh_token: Optional[str] = None
+    app_password: Optional[str] = None
     scopes: List[str] = []
     metadata: Optional[dict] = None
 
@@ -520,15 +523,23 @@ async def add_email_account(
     user_jwt: str = Depends(get_current_user_jwt)
 ):
     """
-    Add a secondary email account via OAuth.
+    Add a secondary email account via OAuth or app-password auth.
 
     - Validates max 5 accounts limit
     - Prevents duplicate accounts
     - Sets up Gmail watch for new account
     - Does NOT create new user (just adds ext_connection)
     """
-    # Validate that at least one auth method is provided
-    if not request.access_token and not request.server_auth_code:
+    provider = request.provider.lower()
+
+    # Validate auth method by provider
+    if provider == "icloud":
+        if not request.provider_email or not request.app_password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="iCloud requires provider_email and app_password"
+            )
+    elif not request.access_token and not request.server_auth_code:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Either access_token or server_auth_code must be provided"

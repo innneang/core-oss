@@ -40,6 +40,43 @@ const resolveGmailDraftId = (email: Email): string | undefined => {
   return undefined;
 };
 
+const SUPPORTED_SEND_PROVIDERS = new Set(['google', 'icloud']);
+
+const isSendCapableAccount = (account?: EmailAccountStatus): account is EmailAccountStatus =>
+  !!account && SUPPORTED_SEND_PROVIDERS.has(account.provider);
+
+const getAccountById = (
+  accountsStatus: EmailAccountStatus[],
+  accountId?: string
+): EmailAccountStatus | undefined => {
+  if (!accountId) return undefined;
+  return accountsStatus.find((account) => account.connectionId === accountId);
+};
+
+const resolveComposeAccount = (
+  accountsStatus: EmailAccountStatus[],
+  selectedAccountIds: string[],
+  preferredAccountId?: string
+): EmailAccountStatus | undefined => {
+  const preferredAccount = getAccountById(accountsStatus, preferredAccountId);
+  if (isSendCapableAccount(preferredAccount)) {
+    return preferredAccount;
+  }
+
+  if (selectedAccountIds.length > 0) {
+    const selectedSupportedAccount = accountsStatus.find(
+      (account) =>
+        selectedAccountIds.includes(account.connectionId) &&
+        isSendCapableAccount(account)
+    );
+    if (selectedSupportedAccount) {
+      return selectedSupportedAccount;
+    }
+  }
+
+  return accountsStatus.find((account) => isSendCapableAccount(account));
+};
+
 export interface ComposeDraft {
   id?: string;  // Gmail draft ID (or legacy message ID resolvable by backend)
   to: string[];
@@ -48,6 +85,9 @@ export interface ComposeDraft {
   subject: string;
   bodyHtml: string;
   bodyText: string;
+  accountId: string;
+  accountEmail: string;
+  accountProvider: string;
 }
 
 interface ComposeState {
@@ -59,13 +99,16 @@ interface ComposeState {
   sendError: string | null;
 }
 
-const createEmptyComposeDraft = (): ComposeDraft => ({
+const createEmptyComposeDraft = (account?: EmailAccountStatus): ComposeDraft => ({
   to: [],
   cc: [],
   bcc: [],
   subject: '',
   bodyHtml: '',
-  bodyText: ''
+  bodyText: '',
+  accountId: account?.connectionId ?? '',
+  accountEmail: account?.email ?? '',
+  accountProvider: account?.provider ?? '',
 });
 
 const createEmptyComposeState = (): ComposeState => ({
@@ -163,6 +206,7 @@ interface EmailState {
   toggleComposeMinimize: () => void;
   updateComposeDraft: (field: keyof ComposeDraft, value: string | string[]) => void;
   updateComposeBody: (bodyHtml: string, bodyText: string) => void;
+  setComposeSender: (accountId: string) => void;
   sendComposedEmail: (attachments?: EmailAttachmentUpload[]) => Promise<boolean>;
   discardCompose: () => void;
 
@@ -308,15 +352,20 @@ export const useEmailStore = create<EmailState>()(
 
       // Compose actions
       openCompose: () => {
+        const { accountsStatus, selectedAccountIds } = get();
+        const defaultAccount = resolveComposeAccount(accountsStatus, selectedAccountIds);
+
         set({
           compose: {
             ...createEmptyComposeState(),
+            draft: createEmptyComposeDraft(defaultAccount),
             isOpen: true
           }
         });
       },
 
       openComposeWithDraft: async (email: Email) => {
+        const { accountsStatus } = get();
         // Always fetch details for drafts to get reliable draft identifiers
         const fetched = await get().fetchEmailDetails(email.id);
         const details = fetched || email;
@@ -325,6 +374,10 @@ export const useEmailStore = create<EmailState>()(
           resolveGmailDraftId(email) ||
           details.id ||
           email.id;
+        const account = getAccountById(
+          accountsStatus,
+          details.connection_id || email.connection_id
+        );
 
         set({
           selectedEmailId: null,
@@ -342,14 +395,24 @@ export const useEmailStore = create<EmailState>()(
               subject: details.subject || '',
               bodyHtml: details.body_html || '',
               bodyText: details.body_text || '',
+              accountId: account?.connectionId || details.connection_id || email.connection_id || '',
+              accountEmail: account?.email || details.account_email || email.account_email || '',
+              accountProvider: account?.provider || details.account_provider || email.account_provider || '',
             },
           },
         });
       },
 
       closeCompose: async () => {
-        const { compose } = get();
+        const { compose, accountsStatus, selectedAccountIds } = get();
         const { draft } = compose;
+        const selectedAccount = resolveComposeAccount(
+          accountsStatus,
+          selectedAccountIds,
+          draft.accountId
+        );
+        const draftAccountId = draft.accountId || selectedAccount?.connectionId || '';
+        const draftAccountProvider = draft.accountProvider || selectedAccount?.provider || '';
 
         // Check if there's content worth saving as draft
         const hasContent = draft.to.length > 0 || draft.subject.trim() || draft.bodyText.trim();
@@ -372,6 +435,17 @@ export const useEmailStore = create<EmailState>()(
                 body_text: draft.bodyText || undefined
               });
             } else {
+              if (draftAccountProvider !== 'google') {
+                set(state => ({
+                  compose: {
+                    ...state.compose,
+                    isSavingDraft: false,
+                    sendError: 'Draft saving is currently available only for Google accounts. Send this message or discard it.',
+                  }
+                }));
+                return;
+              }
+
               // Create new draft
               await saveDraftApi({
                 to: draft.to.length > 0 ? draft.to : undefined,
@@ -379,7 +453,8 @@ export const useEmailStore = create<EmailState>()(
                 bcc: draft.bcc.length > 0 ? draft.bcc : undefined,
                 subject: draft.subject || undefined,
                 body_html: draft.bodyHtml || undefined,
-                body_text: draft.bodyText || undefined
+                body_text: draft.bodyText || undefined,
+                account_id: draftAccountId || undefined,
               });
             }
             // React Query will handle cache invalidation via queryClient
@@ -405,6 +480,7 @@ export const useEmailStore = create<EmailState>()(
         set(state => ({
           compose: {
             ...state.compose,
+            sendError: null,
             draft: {
               ...state.compose.draft,
               [field]: value
@@ -418,6 +494,7 @@ export const useEmailStore = create<EmailState>()(
         set(state => ({
           compose: {
             ...state.compose,
+            sendError: null,
             draft: {
               ...state.compose.draft,
               bodyHtml,
@@ -427,13 +504,40 @@ export const useEmailStore = create<EmailState>()(
         }));
       },
 
+      setComposeSender: (accountId: string) => {
+        const account = getAccountById(get().accountsStatus, accountId);
+        set(state => ({
+          compose: {
+            ...state.compose,
+            sendError: null,
+            draft: {
+              ...state.compose.draft,
+              accountId,
+              accountEmail: account?.email || '',
+              accountProvider: account?.provider || '',
+            }
+          }
+        }));
+      },
+
       sendComposedEmail: async (attachments) => {
-        const { compose } = get();
+        const { compose, accountsStatus, selectedAccountIds } = get();
         const { draft } = compose;
+        const selectedAccount = resolveComposeAccount(
+          accountsStatus,
+          selectedAccountIds,
+          draft.accountId
+        );
+        const accountId = draft.accountId || selectedAccount?.connectionId || '';
+        const accountProvider = draft.accountProvider || selectedAccount?.provider || '';
 
         // Validate
         if (draft.to.length === 0) {
           throw new Error('Please add at least one recipient');
+        }
+
+        if (!draft.id && (!accountId || !SUPPORTED_SEND_PROVIDERS.has(accountProvider))) {
+          throw new Error('No supported sending account is selected. Choose a Google or iCloud account.');
         }
 
         set(state => ({
@@ -456,6 +560,7 @@ export const useEmailStore = create<EmailState>()(
               subject: draft.subject || '(No Subject)',
               body: draft.bodyText || '',
               body_html: draft.bodyHtml || undefined,
+              account_id: accountId,
               attachments: attachments?.length ? attachments : undefined,
             });
           }
@@ -535,6 +640,12 @@ export const useEmailStore = create<EmailState>()(
             userEmail = accountsStatus[0].email;
             accountId = accountsStatus[0].connectionId;
           }
+        }
+
+        const replyAccount = resolveComposeAccount(accountsStatus, [], accountId);
+        if (replyAccount) {
+          accountId = replyAccount.connectionId;
+          userEmail = replyAccount.email;
         }
 
         // Determine recipients
@@ -623,6 +734,12 @@ export const useEmailStore = create<EmailState>()(
           }
         }
 
+        const forwardAccount = resolveComposeAccount(accountsStatus, [], accountId);
+        if (forwardAccount) {
+          accountId = forwardAccount.connectionId;
+          userEmail = forwardAccount.email;
+        }
+
         // Generate subject with "Fwd:" prefix (avoid "Fwd: Fwd: Fwd:")
         const subject = email.subject?.startsWith('Fwd:')
           ? email.subject
@@ -684,6 +801,7 @@ export const useEmailStore = create<EmailState>()(
         set(state => ({
           inlineReply: {
             ...state.inlineReply,
+            sendError: null,
             draft: state.inlineReply.draft
               ? { ...state.inlineReply.draft, [field]: value }
               : null,
@@ -696,6 +814,7 @@ export const useEmailStore = create<EmailState>()(
         set(state => ({
           inlineReply: {
             ...state.inlineReply,
+            sendError: null,
             draft: state.inlineReply.draft
               ? { ...state.inlineReply.draft, bodyHtml, bodyText }
               : null,
@@ -723,7 +842,19 @@ export const useEmailStore = create<EmailState>()(
 
         // Use the stored account email from the draft, with fallback to first account
         const { accountsStatus } = get();
-        const senderEmail = draft.accountEmail || accountsStatus[0]?.email || '';
+        const replyAccount = resolveComposeAccount(accountsStatus, [], draft.accountId);
+        const senderEmail = draft.accountEmail || replyAccount?.email || accountsStatus[0]?.email || '';
+        const senderAccountId = replyAccount?.connectionId || (accountsStatus.length === 0 ? draft.accountId : undefined);
+
+        if (!senderAccountId) {
+          set(state => ({
+            inlineReply: {
+              ...state.inlineReply,
+              sendError: 'No supported sending account is selected. Choose a Google or iCloud account.'
+            }
+          }));
+          return false;
+        }
 
         // Create optimistic reply to show immediately in thread
         const optimisticEmail: Email = {
@@ -764,7 +895,7 @@ export const useEmailStore = create<EmailState>()(
             body: draft.bodyText || '',
             body_html: draft.bodyHtml || undefined,
             thread_id: draft.threadId,
-            account_id: draft.accountId,
+            account_id: senderAccountId,
             attachments: attachments?.length ? attachments : undefined,
           });
 

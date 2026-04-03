@@ -4,6 +4,7 @@ Email service - Send email operations
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 from lib.supabase_client import get_authenticated_supabase_client
+from lib.token_encryption import decrypt_ext_connection_tokens
 import logging
 from googleapiclient.errors import HttpError
 from .google_api_helpers import (
@@ -16,8 +17,28 @@ from .google_api_helpers import (
 from .get_email_details import get_email_attachment
 from .analyze_email_ai import analyze_email_with_ai
 from .draft_cleanup import cleanup_thread_drafts
+from api.services.icloud import send_icloud_email
 
 logger = logging.getLogger(__name__)
+
+
+def _get_connection_for_send(user_id: str, user_jwt: str, from_account_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not from_account_id:
+        return None
+
+    auth_supabase = get_authenticated_supabase_client(user_jwt)
+    result = auth_supabase.table('ext_connections')\
+        .select('id, provider, provider_email, access_token, refresh_token, token_expires_at, metadata')\
+        .eq('id', from_account_id)\
+        .eq('user_id', user_id)\
+        .eq('is_active', True)\
+        .maybe_single()\
+        .execute()
+
+    if not result.data:
+        raise ValueError("Selected email account was not found")
+
+    return decrypt_ext_connection_tokens(result.data)
 
 
 def send_email(
@@ -58,6 +79,24 @@ def send_email(
         Dict with sent email details
     """
     auth_supabase = get_authenticated_supabase_client(user_jwt)
+    connection_data = _get_connection_for_send(user_id, user_jwt, from_account_id)
+
+    if connection_data and connection_data.get('provider') == 'icloud':
+        return send_icloud_email(
+            user_id=user_id,
+            connection_id=connection_data['id'],
+            connection_data=connection_data,
+            to=to,
+            subject=subject,
+            body=body,
+            cc=cc,
+            bcc=bcc,
+            html_body=html_body,
+            thread_id=thread_id,
+            in_reply_to=in_reply_to,
+            references=references,
+            attachments=attachments,
+        )
 
     # Get Gmail service (with optional specific account)
     service, connection_id = get_gmail_service(user_id, user_jwt, account_id=from_account_id)
@@ -494,4 +533,3 @@ def forward_email(
     except Exception as e:
         logger.error(f"Error forwarding email: {str(e)}")
         raise ValueError(f"Failed to forward: {str(e)}")
-

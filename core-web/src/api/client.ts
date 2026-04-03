@@ -769,7 +769,7 @@ export async function getWorkspaceInvitationShareLink(
 
 export interface EmailAccount {
   id: string;
-  provider: 'google' | 'microsoft';
+  provider: 'google' | 'microsoft' | 'icloud';
   provider_email: string;
   provider_name?: string;
   provider_avatar?: string;
@@ -794,9 +794,13 @@ export async function getEmailAccounts(): Promise<{ accounts: EmailAccount[] }> 
 
 export async function addEmailAccount(data: {
   provider: string;
-  server_auth_code: string;
+  server_auth_code?: string;
   code_verifier?: string;
   redirect_uri?: string;
+  provider_email?: string;
+  auth_email?: string;
+  provider_name?: string;
+  app_password?: string;
   scopes: string[];
 }): Promise<EmailAccount> {
   return api('/auth/email-accounts', {

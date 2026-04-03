@@ -60,10 +60,16 @@ export default function SettingsView({ isOpen, onClose }: SettingsViewProps) {
     fetchAccounts,
     addGoogleAccount,
     addMicrosoftAccount,
+    addICloudAccount,
     removeAccount,
   } = useEmailAccountsStore();
   const [showProviderPicker, setShowProviderPicker] = useState(false);
+  const [showICloudForm, setShowICloudForm] = useState(false);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
+  const [icloudEmail, setIcloudEmail] = useState('');
+  const [icloudAuthEmail, setIcloudAuthEmail] = useState('');
+  const [icloudAppPassword, setIcloudAppPassword] = useState('');
+  const [icloudDisplayName, setIcloudDisplayName] = useState('');
 
   const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -128,12 +134,32 @@ export default function SettingsView({ isOpen, onClose }: SettingsViewProps) {
     }
   }, [isAuthenticated, fetchAccounts]);
 
-  const handleAddProvider = async (provider: 'google' | 'microsoft') => {
+  const handleAddProvider = async (provider: 'google' | 'microsoft' | 'icloud') => {
     setShowProviderPicker(false);
     if (provider === 'google') {
       await addGoogleAccount();
+    } else if (provider === 'icloud') {
+      setShowICloudForm(true);
     } else {
       await addMicrosoftAccount();
+    }
+  };
+
+  const handleAddICloud = async () => {
+    try {
+      await addICloudAccount(
+        icloudEmail.trim(),
+        icloudAppPassword.trim(),
+        icloudDisplayName.trim() || undefined,
+        icloudAuthEmail.trim() || undefined
+      );
+      setShowICloudForm(false);
+      setIcloudEmail('');
+      setIcloudAuthEmail('');
+      setIcloudAppPassword('');
+      setIcloudDisplayName('');
+    } catch {
+      // Store already surfaces the error inline.
     }
   };
 
@@ -400,7 +426,7 @@ export default function SettingsView({ isOpen, onClose }: SettingsViewProps) {
                           </p>
                           {/* Provider badge */}
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-bg-gray-dark text-text-secondary shrink-0">
-                            {account.provider === 'google' ? 'Google' : 'Microsoft'}
+                            {account.provider === 'google' ? 'Google' : account.provider === 'microsoft' ? 'Microsoft' : 'iCloud'}
                           </span>
                           {account.is_primary && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 shrink-0">
@@ -480,6 +506,75 @@ export default function SettingsView({ isOpen, onClose }: SettingsViewProps) {
                     <p className="text-xs text-gray-500">Outlook, Microsoft Calendar</p>
                   </div>
                 </button>
+
+                <button
+                  onClick={() => handleAddProvider('icloud')}
+                  className="w-full flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors"
+                >
+                  <div className="w-5 h-5 rounded-full bg-slate-900 text-white text-[10px] font-semibold flex items-center justify-center shrink-0">
+                    iC
+                  </div>
+                  <div className="text-left">
+                    <p className="text-sm font-medium text-gray-900">iCloud</p>
+                    <p className="text-xs text-gray-500">Mail via IMAP + SMTP app password</p>
+                  </div>
+                </button>
+              </div>
+            </Modal>
+
+            <Modal
+              isOpen={showICloudForm}
+              onClose={() => setShowICloudForm(false)}
+              title="Connect iCloud Mail"
+              size="sm"
+            >
+              <div className="space-y-3">
+                <p className="text-sm text-gray-500">
+                  Use your custom address as the mailbox address. The iCloud login can be a username or a different identifier if Apple requires it.
+                </p>
+                <input
+                  type="email"
+                  value={icloudEmail}
+                  onChange={(e) => setIcloudEmail(e.target.value)}
+                  placeholder="you@yourdomain.com"
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-gray-400"
+                />
+                <input
+                  type="text"
+                  value={icloudAuthEmail}
+                  onChange={(e) => setIcloudAuthEmail(e.target.value)}
+                  placeholder="iCloud login username or email"
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-gray-400"
+                />
+                <input
+                  type="text"
+                  value={icloudDisplayName}
+                  onChange={(e) => setIcloudDisplayName(e.target.value)}
+                  placeholder="Display name (optional)"
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-gray-400"
+                />
+                <input
+                  type="password"
+                  value={icloudAppPassword}
+                  onChange={(e) => setIcloudAppPassword(e.target.value)}
+                  placeholder="App-specific password"
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-gray-400"
+                />
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    onClick={() => setShowICloudForm(false)}
+                    className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleAddICloud}
+                    disabled={!icloudEmail.trim() || !icloudAppPassword.trim() || accountAdding}
+                    className="px-4 py-2 text-sm text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    {accountAdding ? 'Connecting...' : 'Connect iCloud'}
+                  </button>
+                </div>
               </div>
             </Modal>
 

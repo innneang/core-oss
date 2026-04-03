@@ -180,6 +180,9 @@ class Settings(BaseSettings):
     # Anthropic (AI agent runtime)
     anthropic_api_key: str = ""
 
+    # Chat model provider
+    chat_provider: str = "anthropic"
+
     # E2B (AI agent sandboxes)
     e2b_api_key: str = ""
     e2b_default_template: str = "base"  # Default sandbox template ID
@@ -237,6 +240,13 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "TOKEN_ENCRYPTION_KEY_PREVIOUS must be a valid Fernet key"
                 ) from exc
+
+        provider = (self.chat_provider or "anthropic").strip().lower()
+        if provider not in {"anthropic", "openai"}:
+            raise ValueError(
+                "CHAT_PROVIDER must be either 'anthropic' or 'openai'"
+            )
+        self.chat_provider = provider
 
         return self
 

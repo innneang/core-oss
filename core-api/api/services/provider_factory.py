@@ -2,7 +2,7 @@
 Provider Factory
 
 Central factory for obtaining provider-specific implementations.
-Routes to the correct provider based on the provider name (google, microsoft).
+Routes to the correct provider based on the provider name (google, microsoft, icloud).
 
 Usage:
     from api.services.provider_factory import ProviderFactory
@@ -28,7 +28,7 @@ from api.services.auth_protocols import (
 logger = logging.getLogger(__name__)
 
 # Supported providers
-SUPPORTED_PROVIDERS = ["google", "microsoft"]
+SUPPORTED_PROVIDERS = ["google", "microsoft", "icloud"]
 
 
 class ProviderNotFoundError(Exception):
@@ -54,7 +54,7 @@ class ProviderFactory:
         Get OAuth provider implementation.
 
         Args:
-            provider: Provider name ('google' or 'microsoft')
+            provider: Provider name ('google', 'microsoft', or 'icloud')
 
         Returns:
             OAuthProvider implementation
@@ -102,6 +102,10 @@ class ProviderFactory:
         elif provider == "microsoft":
             from api.services.microsoft.microsoft_email_sync_provider import MicrosoftEmailSyncProvider
             return MicrosoftEmailSyncProvider()
+
+        elif provider == "icloud":
+            from api.services.icloud.icloud_mail_provider import ICloudEmailSyncProvider
+            return ICloudEmailSyncProvider()
 
         else:
             raise ProviderNotFoundError(
